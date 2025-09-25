@@ -1,7 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from typing import List, Optional
 from app.models.player import Player
 from app.services.sleeper import fetch_players, fetch_player_by_id
+from app.services.sync import sync_players
+from app.models.player_db import PlayerDB
+from app.core.database import SessionLocal
+from sqlalchemy.future import select
 
 router = APIRouter()
 
@@ -64,3 +68,111 @@ async def get_player(player_id: str):
     if not player:
         return {"error": "Player not found"}
     return player
+
+
+@router.post("/sync")
+async def sincronizar_jogadores():
+    """
+    Endpoint para forçar sincronização dos jogadores com a API Sleeper.
+    Atualiza a base de dados PostgreSQL com os dados mais recentes.
+    
+    Returns:
+        dict: Mensagem de sucesso com total de jogadores sincronizados
+    """
+    try:
+        total = await sync_players()
+        return {"message": f"{total} jogadores sincronizados com sucesso"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro na sincronização: {str(e)}")
+
+
+@router.get("/waivers")
+async def obter_waivers():
+    """
+    Endpoint para obter jogadores disponíveis no waiver wire.
+    Retorna apenas jogadores que não estão em nenhum roster (is_free_agent=True).
+    
+    Returns:
+        List[PlayerDB]: Lista de jogadores livres
+    """
+    try:
+        async with SessionLocal() as session:
+            result = await session.execute(
+                select(PlayerDB).where(PlayerDB.is_free_agent == True)
+            )
+            players = result.scalars().all()
+            return players
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar waivers: {str(e)}")
+
+
+@router.post("/roster/{player_id}")
+async def adicionar_ao_roster(player_id: str, user_id: str):
+    """
+    Endpoint para adicionar um jogador ao roster de um usuário.
+    Remove o jogador do waiver wire e o atribui ao usuário especificado.
+    
+    Args:
+        player_id (str): ID do jogador
+        user_id (str): ID do usuário/time
+        
+    Returns:
+        dict: Mensagem de confirmação
+    """
+    try:
+        async with SessionLocal() as session:
+            player = await session.get(PlayerDB, player_id)
+            if not player:
+                raise HTTPException(status_code=404, detail="Jogador não encontrado")
+            
+            if not player.is_free_agent:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Jogador já está no roster de {player.rostered_by}"
+                )
+            
+            player.rostered_by = user_id
+            player.is_free_agent = False
+            await session.commit()
+            
+            return {"message": f"{player.full_name} adicionado ao roster de {user_id}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao adicionar ao roster: {str(e)}")
+
+
+@router.post("/release/{player_id}")
+async def liberar_jogador(player_id: str):
+    """
+    Endpoint para liberar um jogador de volta para o waiver wire.
+    Remove o jogador do roster atual e o marca como free agent.
+    
+    Args:
+        player_id (str): ID do jogador
+        
+    Returns:
+        dict: Mensagem de confirmação
+    """
+    try:
+        async with SessionLocal() as session:
+            player = await session.get(PlayerDB, player_id)
+            if not player:
+                raise HTTPException(status_code=404, detail="Jogador não encontrado")
+            
+            if player.is_free_agent:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Jogador já está disponível no waiver wire"
+                )
+            
+            old_owner = player.rostered_by
+            player.rostered_by = None
+            player.is_free_agent = True
+            await session.commit()
+            
+            return {"message": f"{player.full_name} liberado do roster de {old_owner} para waivers"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao liberar jogador: {str(e)}")

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from typing import List, Optional
 from app.models.player import Player
-from app.services.sleeper import fetch_players
+from app.services.sleeper import fetch_players, fetch_player_by_id
 
 router = APIRouter()
 
@@ -46,3 +46,21 @@ async def obter_jogadores(
         players = [p for p in players if p.status and p.status.lower() == status.lower()]
     
     return players
+
+
+@router.get("/players/{player_id}", response_model=Player)
+async def get_player(player_id: str):
+    """
+    Endpoint para obter um jogador específico pelo ID.
+    Utiliza cache otimizado para busca individual.
+    
+    Args:
+        player_id (str): ID do jogador
+        
+    Returns:
+        Player: Dados do jogador ou erro se não encontrado
+    """
+    player = await fetch_player_by_id(player_id)
+    if not player:
+        return {"error": "Player not found"}
+    return player

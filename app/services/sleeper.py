@@ -4,7 +4,7 @@ from typing import List, Optional
 from app.models.player import Player
 
 # Cache em memória
-_cached_players: Optional[List[Player]] = None
+_cached_players: dict[str, Player] = {}
 _last_fetch_time: Optional[float] = None
 CACHE_TTL = 3600  # segundos (1 hora)
 
@@ -21,11 +21,11 @@ async def fetch_players() -> List[Player]:
     
     # Verificar se o cache é válido
     current_time = time.time()
-    if (_cached_players is not None and 
+    if (_cached_players and 
         _last_fetch_time is not None and 
         (current_time - _last_fetch_time) < CACHE_TTL):
         print("Retornando dados do cache")
-        return _cached_players
+        return list(_cached_players.values())
     
     print("Cache expirado ou vazio, buscando dados da API do Sleeper")
     url = "https://api.sleeper.app/v1/players/nfl"
@@ -63,12 +63,15 @@ async def fetch_players() -> List[Player]:
                     print(f"Erro ao processar jogador {player_id}: {e}")
                     continue
             
-            # Atualizar cache
-            _cached_players = players
+            # Atualizar cache como dicionário
+            players_dict = {
+                p.id: p for p in players
+            }
+            _cached_players = players_dict
             _last_fetch_time = current_time
             print(f"Cache atualizado com {len(players)} jogadores")
             
-            return players
+            return list(players_dict.values())
             
         except httpx.RequestError as e:
             print(f"Erro na requisição para API do Sleeper: {e}")
@@ -76,3 +79,18 @@ async def fetch_players() -> List[Player]:
         except Exception as e:
             print(f"Erro inesperado ao buscar jogadores: {e}")
             return []
+
+
+async def fetch_player_by_id(player_id: str) -> Player | None:
+    """
+    Busca um jogador específico pelo ID.
+    Utiliza o cache em dicionário para busca otimizada.
+    
+    Args:
+        player_id (str): ID do jogador
+        
+    Returns:
+        Player | None: Jogador encontrado ou None se não existir
+    """
+    players = await fetch_players()
+    return _cached_players.get(player_id)
